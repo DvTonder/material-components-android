@@ -87,10 +87,13 @@ public final class MaterialDatePicker<S> extends DialogFragment {
   private static final String NEGATIVE_BUTTON_TEXT_RES_ID_KEY = "NEGATIVE_BUTTON_TEXT_RES_ID_KEY";
   private static final String NEGATIVE_BUTTON_TEXT_KEY = "NEGATIVE_BUTTON_TEXT_KEY";
   private static final String INPUT_MODE_KEY = "INPUT_MODE_KEY";
+  private static final String CLEARABLE_KEY = "CLEARABLE_KEY";
+  private static final String DISMISS_ON_CLEAR_KEY = "DISMISS_ON_CLEAR_KEY";
 
   static final Object CONFIRM_BUTTON_TAG = "CONFIRM_BUTTON_TAG";
   static final Object CANCEL_BUTTON_TAG = "CANCEL_BUTTON_TAG";
   static final Object TOGGLE_BUTTON_TAG = "TOGGLE_BUTTON_TAG";
+  static final Object CLEAR_BUTTON_TAG = "CLEAR_BUTTON_TAG";
 
   /** Date picker will start with calendar view. */
   public static final int INPUT_MODE_CALENDAR = 0;
@@ -131,6 +134,8 @@ public final class MaterialDatePicker<S> extends DialogFragment {
       new LinkedHashSet<>();
   private final LinkedHashSet<DialogInterface.OnCancelListener> onCancelListeners =
       new LinkedHashSet<>();
+  private final LinkedHashSet<OnClickListener> onClearButtonClickListeners =
+          new LinkedHashSet<>();
   private final LinkedHashSet<DialogInterface.OnDismissListener> onDismissListeners =
       new LinkedHashSet<>();
 
@@ -154,6 +159,9 @@ public final class MaterialDatePicker<S> extends DialogFragment {
   private CheckableImageButton headerToggleButton;
   @Nullable private MaterialShapeDrawable background;
   private Button confirmButton;
+  private Button clearButton;
+  private boolean isClearable;
+  private boolean dismissOnClear;
 
   private boolean edgeToEdgeEnabled;
   @Nullable private CharSequence fullTitleText;
@@ -174,6 +182,8 @@ public final class MaterialDatePicker<S> extends DialogFragment {
     args.putCharSequence(POSITIVE_BUTTON_TEXT_KEY, options.positiveButtonText);
     args.putInt(NEGATIVE_BUTTON_TEXT_RES_ID_KEY, options.negativeButtonTextResId);
     args.putCharSequence(NEGATIVE_BUTTON_TEXT_KEY, options.negativeButtonText);
+    args.putBoolean(CLEARABLE_KEY, options.isClearable);
+    args.putBoolean(DISMISS_ON_CLEAR_KEY, options.dismissOnClear);
     materialDatePickerDialogFragment.setArguments(args);
     return materialDatePickerDialogFragment;
   }
@@ -199,6 +209,8 @@ public final class MaterialDatePicker<S> extends DialogFragment {
     bundle.putCharSequence(POSITIVE_BUTTON_TEXT_KEY, positiveButtonText);
     bundle.putInt(NEGATIVE_BUTTON_TEXT_RES_ID_KEY, negativeButtonTextResId);
     bundle.putCharSequence(NEGATIVE_BUTTON_TEXT_KEY, negativeButtonText);
+    bundle.putBoolean(CLEARABLE_KEY, isClearable);
+    bundle.putBoolean(DISMISS_ON_CLEAR_KEY, dismissOnClear);
   }
 
   @Override
@@ -220,6 +232,8 @@ public final class MaterialDatePicker<S> extends DialogFragment {
     fullTitleText =
         titleText != null ? titleText : requireContext().getResources().getText(titleTextResId);
     singleLineTitleText = getFirstLineBySeparator(fullTitleText);
+    isClearable = activeBundle.getBoolean(CLEARABLE_KEY);
+    dismissOnClear = activeBundle.getBoolean(DISMISS_ON_CLEAR_KEY);
   }
 
   private int getThemeResId(Context context) {
@@ -291,11 +305,7 @@ public final class MaterialDatePicker<S> extends DialogFragment {
     initHeaderToggle(context);
 
     confirmButton = root.findViewById(R.id.confirm_button);
-    if (getDateSelector().isSelectionComplete()) {
-      confirmButton.setEnabled(true);
-    } else {
-      confirmButton.setEnabled(false);
-    }
+    confirmButton.setEnabled(getDateSelector().isSelectionComplete());
     confirmButton.setTag(CONFIRM_BUTTON_TAG);
     if (positiveButtonText != null) {
       confirmButton.setText(positiveButtonText);
@@ -331,6 +341,35 @@ public final class MaterialDatePicker<S> extends DialogFragment {
             dismiss();
           }
         });
+
+    clearButton = root.findViewById(R.id.clear_button);
+    clearButton.setTag(CLEAR_BUTTON_TAG);
+    if (isClearable) {
+      clearButton.setEnabled(getDateSelector().isSelectionComplete());
+      clearButton.setOnClickListener(
+              new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                  // Clear the selection
+                  calendar.clearSelection();
+
+                  // Call 'cleared' listeners, if any
+                  for (View.OnClickListener listener : onClearButtonClickListeners) {
+                    listener.onClick(v);
+                  }
+
+                  if (dismissOnClear) {
+                    dismiss();
+                  }
+                }
+              });
+
+      clearButton.setVisibility(View.VISIBLE);
+
+    } else {
+      clearButton.setVisibility(View.GONE);
+    }
+
     return root;
   }
 
@@ -467,12 +506,13 @@ public final class MaterialDatePicker<S> extends DialogFragment {
           @Override
           public void onSelectionChanged(S selection) {
             updateHeader(getHeaderText());
-            confirmButton.setEnabled(getDateSelector().isSelectionComplete());
+            updateActionButtonEnabledState();
           }
 
           @Override
           public void onIncompleteSelectionChanged() {
             confirmButton.setEnabled(false);
+            clearButton.setEnabled(false);
           }
         });
   }
@@ -487,15 +527,20 @@ public final class MaterialDatePicker<S> extends DialogFragment {
     ViewCompat.setAccessibilityDelegate(headerToggleButton, null);
     updateToggleContentDescription(headerToggleButton);
     headerToggleButton.setOnClickListener(
-        v -> {
-          // Update confirm button in case in progress selection has been reset
-          confirmButton.setEnabled(getDateSelector().isSelectionComplete());
+          v -> {
+            // Update confirm button in case in progress selection has been reset
+            updateActionButtonEnabledState();
 
           headerToggleButton.toggle();
           inputMode = (inputMode == INPUT_MODE_TEXT) ? INPUT_MODE_CALENDAR : INPUT_MODE_TEXT;
           updateToggleContentDescription(headerToggleButton);
           startPickerFragment();
         });
+  }
+
+  private void updateActionButtonEnabledState() {
+    confirmButton.setEnabled(getDateSelector().isSelectionComplete());
+    clearButton.setEnabled(isClearable && getDateSelector().isSelectionComplete());
   }
 
   private void updateToggleContentDescription(@NonNull CheckableImageButton toggle) {
@@ -612,6 +657,27 @@ public final class MaterialDatePicker<S> extends DialogFragment {
     onNegativeButtonClickListeners.clear();
   }
 
+  /** The supplied listener is called when the user clicks the clear button. */
+  public boolean addOnClearButtonClickListener(
+      @NonNull OnClickListener onClearButtonClickListener) {
+    return onClearButtonClickListeners.add(onClearButtonClickListener);
+  }
+
+  /**
+   * Removes a listener previously added via {@link MaterialDatePicker#addOnClearButtonClickListener}.
+   */
+  public boolean removeOnClearButtonClickListener(
+      @NonNull OnClickListener onClearButtonClickListener) {
+    return onClearButtonClickListeners.remove(onClearButtonClickListener);
+  }
+
+  /**
+   * Removes all listeners added via {@link MaterialDatePicker#addOnClearButtonClickListener}.
+   */
+  public void clearOnClearButtonClickListeners() {
+    onClearButtonClickListeners.clear();
+  }
+
   /**
    * The supplied listener is called when the user cancels the picker via back button or a touch
    * outside the view. It is not called when the user clicks the cancel button. To add a listener
@@ -666,6 +732,8 @@ public final class MaterialDatePicker<S> extends DialogFragment {
     CharSequence negativeButtonText = null;
     @Nullable S selection = null;
     @InputMode int inputMode = INPUT_MODE_CALENDAR;
+    boolean isClearable = false;
+    boolean dismissOnClear = false;
 
     private Builder(DateSelector<S> dateSelector) {
       this.dateSelector = dateSelector;
@@ -828,6 +896,20 @@ public final class MaterialDatePicker<S> extends DialogFragment {
     @CanIgnoreReturnValue
     public Builder<S> setInputMode(@InputMode int inputMode) {
       this.inputMode = inputMode;
+      return this;
+    }
+
+    /** Sets the state of the clear button */
+    @NonNull
+    public Builder<S> setClearable(boolean clearable) {
+      this.isClearable = clearable;
+      return this;
+    }
+
+    /** Sets the state of the dialog dismiss state when clear button is clicked */
+    @NonNull
+    public Builder<S> setDismissOnClear(boolean dismiss) {
+      this.dismissOnClear = dismiss;
       return this;
     }
 
